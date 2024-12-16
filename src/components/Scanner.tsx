@@ -8,48 +8,73 @@ export const Scanner: React.FC = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
     const [isCapturing, setIsCapturing] = useState(false);
     const [processedImage, setProcessedImage] = useState<ImageData | null>(null);
     const [recognizedText, setRecognizedText] = useState<string>('');
-    const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+    const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
     const [selectedCamera, setSelectedCamera] = useState<string>('');
-    const [showCamera, setShowCamera] = useState(true);
+    const [isCamera, setIsCamera] = useState(true);
+
+    // Добавим определение мобильного устройства
+    const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
     useEffect(() => {
-        loadCameras();
+        const getDevices = async () => {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                setAvailableCameras(videoDevices);
+                
+                // На мобильных устройствах предпочитаем заднюю камеру
+                if (isMobile) {
+                    const backCamera = videoDevices.find(device => 
+                        device.label.toLowerCase().includes('back') || 
+                        device.label.toLowerCase().includes('задняя') ||
+                        device.label.toLowerCase().includes('rear')
+                    );
+                    if (backCamera) {
+                        setSelectedCamera(backCamera.deviceId);
+                    }
+                }
+            } catch (error) {
+                console.error('Error getting devices:', error);
+            }
+        };
+
+        getDevices();
     }, []);
 
-    const loadCameras = async () => {
+    const startCamera = async () => {
         try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const videoDevices = devices.filter(device => device.kind === 'videoinput');
-            setCameras(videoDevices);
-            if (videoDevices.length > 0) {
-                setSelectedCamera(videoDevices[0].deviceId);
-                initCamera(videoDevices[0].deviceId);
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
             }
-        } catch (error) {
-            console.error('Ошибка при получении списка камер:', error);
-        }
-    };
 
-    const initCamera = async (deviceId: string) => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { deviceId: deviceId }
-            });
+            const constraints = {
+                video: {
+                    deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
+                    facingMode: isMobile ? 'environment' : 'user',
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            streamRef.current = stream;
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
             }
         } catch (error) {
-            console.error('Ошибка при инициализации камеры:', error);
+            console.error('Error accessing camera:', error);
+            alert('Ошибка при доступе к камере. Пожалуйста, убедитесь, что у приложения есть разрешение на использование камеры.');
         }
     };
 
     const handleCameraChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
         const deviceId = event.target.value;
         setSelectedCamera(deviceId);
-        initCamera(deviceId);
+        startCamera();
     };
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,13 +105,6 @@ export const Scanner: React.FC = () => {
             console.error('Ошибка при обработке файла:', error);
         } finally {
             setIsCapturing(false);
-        }
-    };
-
-    const toggleInput = (useCamera: boolean) => {
-        setShowCamera(useCamera);
-        if (!useCamera && fileInputRef.current) {
-            fileInputRef.current.click();
         }
     };
 
@@ -180,7 +198,7 @@ export const Scanner: React.FC = () => {
         }
     };
 
-    const sendToTelegram = async () => {
+    const sendToTelegram = async (file: File) => {
         if (!processedImage || !recognizedText || !canvasRef.current) return;
 
         try {
@@ -192,7 +210,6 @@ export const Scanner: React.FC = () => {
             });
 
             if (window.Telegram?.WebApp) {
-                const file = new File([imageBlob], 'scanned-image.jpg', { type: 'image/jpeg' });
                 window.Telegram.WebApp.sendData(JSON.stringify({
                     type: 'image',
                     text: recognizedText,
@@ -201,6 +218,25 @@ export const Scanner: React.FC = () => {
             }
         } catch (error) {
             console.error('Ошибка при отправке в Telegram:', error);
+        }
+    };
+
+    const handleSendToTelegram = async () => {
+        if (!processedImage) {
+            alert('Сначала сделайте снимок!');
+            return;
+        }
+
+        try {
+            // Конвертируем base64 в File
+            const response = await fetch(canvasRef.current?.toDataURL());
+            const blob = await response.blob();
+            const file = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
+            
+            await sendToTelegram(file);
+        } catch (error) {
+            console.error('Error sending to Telegram:', error);
+            alert('Ошибка при отправке в Telegram');
         }
     };
 
@@ -214,108 +250,99 @@ export const Scanner: React.FC = () => {
         });
     };
 
+    // Обновляем UI для лучшей поддержки мобильных устройств
     return (
-        <div className="flex flex-col items-center gap-4">
-            <div className="w-full max-w-xl">
-                <div className="flex justify-center gap-4 mb-4">
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
+            <div className="w-full max-w-md">
+                <div className="mb-4 flex justify-between items-center">
                     <button
-                        onClick={() => toggleInput(true)}
-                        className={`px-4 py-2 rounded-lg ${showCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => setIsCamera(true)}
+                        className={`px-4 py-2 rounded-lg ${isCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
                     >
                         Камера
                     </button>
                     <button
-                        onClick={() => toggleInput(false)}
-                        className={`px-4 py-2 rounded-lg ${!showCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => setIsCamera(false)}
+                        className={`px-4 py-2 rounded-lg ${!isCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
                     >
                         Галерея
                     </button>
                 </div>
 
-                {cameras.length > 1 && showCamera && (
-                    <select
-                        value={selectedCamera}
-                        onChange={handleCameraChange}
-                        className="w-full p-2 mb-4 border rounded-lg"
-                    >
-                        {cameras.map((camera) => (
-                            <option key={camera.deviceId} value={camera.deviceId}>
-                                {camera.label || `Камера ${camera.deviceId.slice(0, 5)}`}
-                            </option>
-                        ))}
-                    </select>
+                {isCamera && (
+                    <>
+                        <div className="relative w-full aspect-[3/4] bg-black rounded-lg overflow-hidden">
+                            <video
+                                ref={videoRef}
+                                autoPlay
+                                playsInline
+                                className="absolute inset-0 w-full h-full object-cover"
+                            />
+                        </div>
+                        <div className="mt-4 flex justify-center">
+                            <button
+                                onClick={captureImage}
+                                className="px-6 py-3 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors"
+                            >
+                                Сделать снимок
+                            </button>
+                        </div>
+                    </>
                 )}
 
-                <div className="relative w-full">
-                    {showCamera && (
-                        <video
-                            ref={videoRef}
-                            autoPlay
-                            playsInline
-                            className="w-full rounded-lg shadow-lg"
+                {!isCamera && (
+                    <div className="w-full p-4 border-2 border-dashed border-gray-300 rounded-lg text-center">
+                        <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleFileUpload}
+                            className="hidden"
+                            id="fileInput"
                         />
-                    )}
-                    <canvas ref={canvasRef} className="hidden" />
-                    <input
-                        type="file"
-                        ref={fileInputRef}
-                        accept="image/*"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                    />
-                </div>
-            </div>
-
-            <div className="flex flex-wrap gap-4 justify-center">
-                {showCamera ? (
-                    <button
-                        onClick={captureImage}
-                        disabled={isCapturing}
-                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
-                    >
-                        {isCapturing ? 'Обработка...' : 'Сканировать'}
-                    </button>
-                ) : (
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-                    >
-                        Выбрать файл
-                    </button>
+                        <label
+                            htmlFor="fileInput"
+                            className="cursor-pointer px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors inline-block"
+                        >
+                            Выбрать файл
+                        </label>
+                    </div>
                 )}
 
                 {processedImage && (
-                    <>
-                        <button
-                            onClick={sendToTelegram}
-                            className="px-4 py-2 bg-[#0088cc] text-white rounded-lg hover:bg-[#0077b5]"
-                        >
-                            Отправить в Telegram
-                        </button>
-                        <button
-                            onClick={saveAsPDF}
-                            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-                        >
-                            Сохранить PDF
-                        </button>
-                        <button
-                            onClick={saveAsWord}
-                            className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600"
-                        >
-                            Сохранить Word
-                        </button>
-                    </>
+                    <div className="mt-4">
+                        <canvas
+                            ref={canvasRef}
+                            className="w-full rounded-lg shadow-lg"
+                        />
+                        <div className="mt-4 flex flex-wrap gap-2 justify-center">
+                            <button
+                                onClick={handleSendToTelegram}
+                                className="px-4 py-2 bg-[#0088cc] text-white rounded-lg hover:bg-[#0077b5]"
+                            >
+                                Отправить в Telegram
+                            </button>
+                            <button
+                                onClick={() => setProcessedImage(null)}
+                                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                            >
+                                Отменить
+                            </button>
+                            <button
+                                onClick={saveAsPDF}
+                                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+                            >
+                                Сохранить PDF
+                            </button>
+                            <button
+                                onClick={saveAsWord}
+                                className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600"
+                            >
+                                Сохранить Word
+                            </button>
+                        </div>
+                    </div>
                 )}
             </div>
-
-            {processedImage && (
-                <div className="mt-4 w-full max-w-xl">
-                    <h3 className="text-lg font-semibold mb-2">Распознанный текст:</h3>
-                    <div className="p-4 bg-gray-100 rounded-lg">
-                        <p className="whitespace-pre-wrap">{recognizedText}</p>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

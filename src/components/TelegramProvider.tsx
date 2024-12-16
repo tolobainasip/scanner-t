@@ -1,22 +1,12 @@
 "use client";
 
 import React, { useEffect } from 'react';
-import { initTelegramApp } from '@/utils/telegram';
+import { initTelegramApp } from '../config/telegram';
 
-export const TelegramProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    useEffect(() => {
-        const script = document.createElement('script');
-        script.src = 'https://telegram.org/js/telegram-web-app.js';
-        script.async = true;
-        script.onload = () => {
-            initTelegramApp();
-        };
-        document.head.appendChild(script);
+export const TelegramProvider = ({ children }: { children: React.ReactNode }) => {
+  useEffect(() => {
+    initTelegramApp();
+  }, []);
 
-        return () => {
-            document.head.removeChild(script);
-        };
-    }, []);
-
-    return <>{children}</>;
+  return <>{children}</>;
 };
