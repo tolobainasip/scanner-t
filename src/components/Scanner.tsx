@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { sendToTelegram } from '../config/telegram';
 import { processImage } from '../utils/imageProcessing';
 
@@ -14,33 +14,68 @@ export const Scanner = () => {
     const [isCamera, setIsCamera] = useState(true);
     const [recognizedText, setRecognizedText] = useState('');
     const [isScanning, setIsScanning] = useState(false);
-    const [isVideoReady, setIsVideoReady] = useState(false);
 
     // Определяем, является ли устройство мобильным
     const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
+    useEffect(() => {
+        // Очищаем ресурсы при размонтировании компонента
+        return () => {
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+            }
+        };
+    }, []);
+
     const startCamera = async () => {
         try {
+            // Останавливаем предыдущий стрим, если есть
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(track => track.stop());
             }
 
-            const constraints = {
+            // Запрашиваем доступ к камере
+            const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: isMobile ? 'environment' : 'user',
-                    width: { ideal: window.innerWidth },
-                    height: { ideal: window.innerHeight }
-                }
-            };
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                },
+                audio: false
+            });
 
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            // Сохраняем стрим
             streamRef.current = stream;
+
+            // Настраиваем видео элемент
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
-                await videoRef.current.play(); // Явно запускаем воспроизведение
-                setIsCameraOpen(true);
-                // Запускаем эффект сканирования только после готовности видео
-                setIsVideoReady(false);
+                videoRef.current.setAttribute('playsinline', 'true'); // Важно для iOS
+                
+                // Ждем, пока видео будет готово
+                await new Promise((resolve) => {
+                    if (videoRef.current) {
+                        videoRef.current.onloadedmetadata = () => {
+                            if (videoRef.current) {
+                                videoRef.current.play()
+                                    .then(() => {
+                                        // Устанавливаем стили только после успешного запуска
+                                        videoRef.current.style.width = '100vw';
+                                        videoRef.current.style.height = '100vh';
+                                        videoRef.current.style.objectFit = 'cover';
+                                        document.documentElement.style.overflow = 'hidden';
+                                        setIsCameraOpen(true);
+                                        setIsScanning(true);
+                                        resolve(true);
+                                    })
+                                    .catch(error => {
+                                        console.error('Error playing video:', error);
+                                        alert('Ошибка при запуске камеры');
+                                    });
+                            }
+                        };
+                    }
+                });
             }
         } catch (error) {
             console.error('Error accessing camera:', error);
@@ -48,29 +83,24 @@ export const Scanner = () => {
         }
     };
 
-    const handleVideoReady = () => {
-        setIsVideoReady(true);
-        setIsScanning(true);
-        if (videoRef.current) {
-            videoRef.current.style.width = '100vw';
-            videoRef.current.style.height = '100vh';
-            videoRef.current.style.objectFit = 'cover';
-            document.documentElement.style.overflow = 'hidden';
-        }
-    };
-
     const stopCamera = () => {
+        // Останавливаем все треки
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
             streamRef.current = null;
         }
+
+        // Очищаем видео элемент
         if (videoRef.current) {
             videoRef.current.srcObject = null;
             videoRef.current.style.width = '';
             videoRef.current.style.height = '';
             videoRef.current.style.objectFit = '';
-            document.documentElement.style.overflow = '';
         }
+
+        // Восстанавливаем прокрутку
+        document.documentElement.style.overflow = '';
+        
         setIsCameraOpen(false);
         setIsScanning(false);
     };
@@ -81,11 +111,13 @@ export const Scanner = () => {
         const video = videoRef.current;
         const canvas = canvasRef.current;
 
+        // Устанавливаем размеры canvas равными размерам видео
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Захватываем кадр
         ctx.drawImage(video, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         setProcessedImage(imageData);
@@ -102,25 +134,6 @@ export const Scanner = () => {
         stopCamera();
     };
 
-    const handleSendToTelegram = async () => {
-        if (!processedImage || !canvasRef.current) {
-            alert('Сначала сделайте снимок!');
-            return;
-        }
-
-        try {
-            const dataUrl = canvasRef.current.toDataURL('image/jpeg');
-            const response = await fetch(dataUrl);
-            const blob = await response.blob();
-            const file = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
-            
-            await sendToTelegram(file);
-        } catch (error) {
-            console.error('Error sending to Telegram:', error);
-            alert('Ошибка при отправке в Telegram');
-        }
-    };
-
     return (
         <div className={`min-h-screen bg-gradient-to-br from-blue-50 to-sky-50 p-4 ${isCameraOpen ? 'camera-fullscreen' : ''}`}>
             <div className={`max-w-md mx-auto space-y-6 ${isCameraOpen ? 'w-screen h-screen m-0 max-w-none' : ''}`}>
@@ -134,15 +147,14 @@ export const Scanner = () => {
 
                 {/* Camera View */}
                 {isCameraOpen && (
-                    <div className="fixed inset-0 z-50">
+                    <div className="fixed inset-0 z-50 bg-black">
                         <video
                             ref={videoRef}
                             autoPlay
                             playsInline
-                            onLoadedMetadata={handleVideoReady}
-                            className={`w-full h-full object-cover ${isVideoReady ? 'opacity-100' : 'opacity-0'}`}
+                            className="w-full h-full object-cover"
                         />
-                        {isScanning && isVideoReady && (
+                        {isScanning && (
                             <div className="scanner-line"></div>
                         )}
                         <div className="absolute bottom-8 left-0 right-0 flex justify-center space-x-4">
@@ -187,6 +199,9 @@ export const Scanner = () => {
                         )}
                     </>
                 )}
+
+                {/* Hidden canvas for image processing */}
+                <canvas ref={canvasRef} className="hidden" />
             </div>
         </div>
     );
