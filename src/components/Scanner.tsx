@@ -1,49 +1,19 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
-import { initializeImageCapture, processImage } from '@/utils/imageProcessing';
-import { convertToPDF, convertToWord } from '@/utils/documentConversion';
+import React, { useRef, useState } from 'react';
+import { sendToTelegram } from '../config/telegram';
 
-export const Scanner: React.FC = () => {
+export const Scanner = () => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const [isCapturing, setIsCapturing] = useState(false);
     const [processedImage, setProcessedImage] = useState<ImageData | null>(null);
-    const [recognizedText, setRecognizedText] = useState<string>('');
-    const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
-    const [selectedCamera, setSelectedCamera] = useState<string>('');
+    const [isCameraOpen, setIsCameraOpen] = useState(false);
     const [isCamera, setIsCamera] = useState(true);
 
-    // Добавим определение мобильного устройства
+    // Определяем, является ли устройство мобильным
     const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-    useEffect(() => {
-        const getDevices = async () => {
-            try {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
-                setAvailableCameras(videoDevices);
-                
-                // На мобильных устройствах предпочитаем заднюю камеру
-                if (isMobile) {
-                    const backCamera = videoDevices.find(device => 
-                        device.label.toLowerCase().includes('back') || 
-                        device.label.toLowerCase().includes('задняя') ||
-                        device.label.toLowerCase().includes('rear')
-                    );
-                    if (backCamera) {
-                        setSelectedCamera(backCamera.deviceId);
-                    }
-                }
-            } catch (error) {
-                console.error('Error getting devices:', error);
-            }
-        };
-
-        getDevices();
-    }, []);
 
     const startCamera = async () => {
         try {
@@ -53,7 +23,6 @@ export const Scanner: React.FC = () => {
 
             const constraints = {
                 video: {
-                    deviceId: selectedCamera ? { exact: selectedCamera } : undefined,
                     facingMode: isMobile ? 'environment' : 'user',
                     width: { ideal: 1920 },
                     height: { ideal: 1080 }
@@ -65,171 +34,75 @@ export const Scanner: React.FC = () => {
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
             }
+            setIsCameraOpen(true);
         } catch (error) {
             console.error('Error accessing camera:', error);
             alert('Ошибка при доступе к камере. Пожалуйста, убедитесь, что у приложения есть разрешение на использование камеры.');
         }
     };
 
-    const handleCameraChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-        const deviceId = event.target.value;
-        setSelectedCamera(deviceId);
-        startCamera();
+    const stopCamera = () => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+        if (videoRef.current) {
+            videoRef.current.srcObject = null;
+        }
+        setIsCameraOpen(false);
     };
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
-        if (!file || !canvasRef.current) return;
+        if (!file) return;
 
-        setIsCapturing(true);
         try {
             const img = new Image();
             img.src = URL.createObjectURL(file);
-            await new Promise((resolve) => {
-                img.onload = resolve;
-            });
+            img.onload = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
 
-            const canvas = canvasRef.current;
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return;
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
 
-            ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-            const { processedImage: processed, text } = await processImage(imageData);
-            setProcessedImage(processed);
-            setRecognizedText(text);
+                ctx.drawImage(img, 0, 0);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                setProcessedImage(imageData);
+            };
         } catch (error) {
-            console.error('Ошибка при обработке файла:', error);
-        } finally {
-            setIsCapturing(false);
+            console.error('Error processing file:', error);
         }
     };
 
     const captureImage = async () => {
         if (!videoRef.current || !canvasRef.current) return;
 
-        setIsCapturing(true);
-        try {
-            const canvas = canvasRef.current;
-            const video = videoRef.current;
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
 
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-            ctx.drawImage(video, 0, 0);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-            const { processedImage: processed, text } = await processImage(imageData);
-            setProcessedImage(processed);
-            setRecognizedText(text);
-        } catch (error) {
-            console.error('Ошибка при захвате изображения:', error);
-        } finally {
-            setIsCapturing(false);
-        }
-    };
-
-    const saveAsPDF = async () => {
-        if (!processedImage || !recognizedText) return;
-
-        try {
-            const pdfBytes = await convertToPDF(processedImage, recognizedText);
-            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-            
-            if (window.Telegram?.WebApp) {
-                // Отправляем файл в Telegram
-                const file = new File([blob], 'scanned-document.pdf', { type: 'application/pdf' });
-                window.Telegram.WebApp.sendData(JSON.stringify({
-                    type: 'pdf',
-                    text: recognizedText,
-                    file: await fileToBase64(file)
-                }));
-            } else {
-                // Если не в Telegram, сохраняем локально
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'scanned-document.pdf';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }
-        } catch (error) {
-            console.error('Ошибка при сохранении PDF:', error);
-        }
-    };
-
-    const saveAsWord = async () => {
-        if (!processedImage || !recognizedText) return;
-
-        try {
-            const docxBytes = await convertToWord(processedImage, recognizedText);
-            const blob = new Blob([docxBytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-            
-            if (window.Telegram?.WebApp) {
-                // Отправляем файл в Telegram
-                const file = new File([blob], 'scanned-document.docx', { 
-                    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
-                });
-                window.Telegram.WebApp.sendData(JSON.stringify({
-                    type: 'docx',
-                    text: recognizedText,
-                    file: await fileToBase64(file)
-                }));
-            } else {
-                // Если не в Telegram, сохраняем локально
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'scanned-document.docx';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }
-        } catch (error) {
-            console.error('Ошибка при сохранении Word:', error);
-        }
-    };
-
-    const sendToTelegram = async (file: File) => {
-        if (!processedImage || !recognizedText || !canvasRef.current) return;
-
-        try {
-            const canvas = canvasRef.current;
-            const imageBlob = await new Promise<Blob>((resolve) => {
-                canvas.toBlob((blob) => {
-                    if (blob) resolve(blob);
-                }, 'image/jpeg', 0.8);
-            });
-
-            if (window.Telegram?.WebApp) {
-                window.Telegram.WebApp.sendData(JSON.stringify({
-                    type: 'image',
-                    text: recognizedText,
-                    file: await fileToBase64(file)
-                }));
-            }
-        } catch (error) {
-            console.error('Ошибка при отправке в Telegram:', error);
-        }
+        ctx.drawImage(video, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        setProcessedImage(imageData);
+        stopCamera();
     };
 
     const handleSendToTelegram = async () => {
-        if (!processedImage) {
+        if (!processedImage || !canvasRef.current) {
             alert('Сначала сделайте снимок!');
             return;
         }
 
         try {
-            // Конвертируем base64 в File
-            const response = await fetch(canvasRef.current?.toDataURL());
+            const dataUrl = canvasRef.current.toDataURL('image/jpeg');
+            const response = await fetch(dataUrl);
             const blob = await response.blob();
             const file = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
             
@@ -240,58 +113,83 @@ export const Scanner: React.FC = () => {
         }
     };
 
-    // Вспомогательная функция для конвертации файла в base64
-    const fileToBase64 = (file: File): Promise<string> => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = error => reject(error);
-        });
-    };
-
-    // Обновляем UI для лучшей поддержки мобильных устройств
     return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4">
-            <div className="w-full max-w-md">
-                <div className="mb-4 flex justify-between items-center">
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-sky-50 p-4">
+            <div className="max-w-md mx-auto space-y-6">
+                {/* Header */}
+                <div className="text-center">
+                    <h1 className="text-2xl font-bold text-gray-800">Document Scanner</h1>
+                    <p className="text-gray-600">Сканируйте документы и отправляйте в Telegram</p>
+                </div>
+
+                {/* Mode Switcher */}
+                <div className="glass-morphism rounded-full p-1 flex justify-between">
                     <button
-                        onClick={() => setIsCamera(true)}
-                        className={`px-4 py-2 rounded-lg ${isCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => {
+                            setIsCamera(true);
+                            stopCamera();
+                        }}
+                        className={`flex-1 btn ${isCamera ? 'btn-primary' : 'btn-secondary'}`}
                     >
-                        Камера
+                        <span className="flex items-center justify-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                    d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                            </svg>
+                            Камера
+                        </span>
                     </button>
                     <button
-                        onClick={() => setIsCamera(false)}
-                        className={`px-4 py-2 rounded-lg ${!isCamera ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                        onClick={() => {
+                            setIsCamera(false);
+                            stopCamera();
+                        }}
+                        className={`flex-1 btn ${!isCamera ? 'btn-primary' : 'btn-secondary'}`}
                     >
-                        Галерея
+                        <span className="flex items-center justify-center gap-2">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>
+                            Галерея
+                        </span>
                     </button>
                 </div>
 
-                {isCamera && (
-                    <>
-                        <div className="relative w-full aspect-[3/4] bg-black rounded-lg overflow-hidden">
-                            <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                className="absolute inset-0 w-full h-full object-cover"
-                            />
+                {/* Main Content */}
+                {isCamera && !isCameraOpen && (
+                    <div className="flex justify-center">
+                        <button
+                            onClick={startCamera}
+                            className="btn btn-primary"
+                        >
+                            <span className="flex items-center gap-2">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                Открыть камеру
+                            </span>
+                        </button>
+                    </div>
+                )}
+
+                {isCamera && isCameraOpen && (
+                    <div className="camera-container">
+                        <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            className="absolute inset-0 w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-[90%] h-[80%] border-2 border-white/50 rounded-lg"></div>
                         </div>
-                        <div className="mt-4 flex justify-center">
-                            <button
-                                onClick={captureImage}
-                                className="px-6 py-3 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors"
-                            >
-                                Сделать снимок
-                            </button>
-                        </div>
-                    </>
+                    </div>
                 )}
 
                 {!isCamera && (
-                    <div className="w-full p-4 border-2 border-dashed border-gray-300 rounded-lg text-center">
+                    <div className="file-drop-zone">
                         <input
                             type="file"
                             accept="image/*"
@@ -301,45 +199,66 @@ export const Scanner: React.FC = () => {
                         />
                         <label
                             htmlFor="fileInput"
-                            className="cursor-pointer px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors inline-block"
+                            className="flex flex-col items-center justify-center cursor-pointer"
                         >
-                            Выбрать файл
+                            <svg className="w-12 h-12 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            <span className="text-gray-600">Нажмите или перетащите файл сюда</span>
                         </label>
                     </div>
                 )}
 
+                {/* Preview */}
                 {processedImage && (
-                    <div className="mt-4">
+                    <div className="mt-6 space-y-4">
                         <canvas
                             ref={canvasRef}
-                            className="w-full rounded-lg shadow-lg"
+                            className="w-full rounded-2xl shadow-xl"
                         />
-                        <div className="mt-4 flex flex-wrap gap-2 justify-center">
+                        <div className="flex flex-wrap gap-3 justify-center">
                             <button
                                 onClick={handleSendToTelegram}
-                                className="px-4 py-2 bg-[#0088cc] text-white rounded-lg hover:bg-[#0077b5]"
+                                className="btn btn-accent"
                             >
-                                Отправить в Telegram
+                                <span className="flex items-center gap-2">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                            d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                    </svg>
+                                    Отправить в Telegram
+                                </span>
                             </button>
                             <button
-                                onClick={() => setProcessedImage(null)}
-                                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                                onClick={() => {
+                                    setProcessedImage(null);
+                                    setIsCameraOpen(false);
+                                }}
+                                className="btn btn-danger"
                             >
                                 Отменить
                             </button>
-                            <button
-                                onClick={saveAsPDF}
-                                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-                            >
-                                Сохранить PDF
-                            </button>
-                            <button
-                                onClick={saveAsWord}
-                                className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600"
-                            >
-                                Сохранить Word
-                            </button>
                         </div>
+                    </div>
+                )}
+
+                {/* Camera Controls */}
+                {isCamera && isCameraOpen && !processedImage && (
+                    <div className="controls-container">
+                        <button
+                            onClick={captureImage}
+                            className="btn btn-primary"
+                        >
+                            <span className="flex items-center gap-2">
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <circle cx="12" cy="12" r="3" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                        d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                                </svg>
+                                Сделать снимок
+                            </span>
+                        </button>
                     </div>
                 )}
             </div>

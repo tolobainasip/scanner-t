@@ -1,5 +1,5 @@
 export const TELEGRAM_BOT_TOKEN = '7928824207:AAHT7VlBfSetpY7uNwqgiEEoEW6vlFJYoGQ';
-export const TELEGRAM_BOT_USERNAME = 'your_bot_username'; // Замените на username вашего бота
+export const TELEGRAM_BOT_USERNAME = 'ScannerTBot'; // Замените на username вашего бота
 
 export const initTelegramApp = () => {
   if (typeof window !== 'undefined') {
@@ -19,34 +19,32 @@ export const getTelegramWebApp = () => {
 
 export const sendToTelegram = async (file: File) => {
   const webApp = getTelegramWebApp();
+  
   if (!webApp) {
-    throw new Error('Telegram WebApp not initialized');
+    throw new Error('Telegram WebApp is not initialized');
   }
 
-  // Convert file to base64
-  const reader = new FileReader();
-  reader.readAsDataURL(file);
-  
-  return new Promise((resolve, reject) => {
-    reader.onload = async () => {
-      try {
-        const base64Data = reader.result as string;
-        
-        // Send file to Telegram
-        webApp.sendData(JSON.stringify({
-          type: 'document',
-          data: base64Data,
-          filename: file.name
-        }));
-        
-        resolve(true);
-      } catch (error) {
-        reject(error);
-      }
-    };
-    
-    reader.onerror = () => {
-      reject(new Error('Failed to read file'));
-    };
-  });
+  try {
+    // Конвертируем файл в base64
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+    });
+
+    // Отправляем данные в Telegram
+    webApp.sendData(JSON.stringify({
+      type: 'image',
+      file: base64,
+      filename: file.name
+    }));
+
+  } catch (error) {
+    console.error('Error sending to Telegram:', error);
+    throw error;
+  }
 };
