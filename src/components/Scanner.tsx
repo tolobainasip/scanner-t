@@ -14,6 +14,7 @@ export const Scanner = () => {
     const [isCamera, setIsCamera] = useState(true);
     const [recognizedText, setRecognizedText] = useState('');
     const [isScanning, setIsScanning] = useState(false);
+    const [isVideoReady, setIsVideoReady] = useState(false);
 
     // Определяем, является ли устройство мобильным
     const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -36,17 +37,25 @@ export const Scanner = () => {
             streamRef.current = stream;
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
-                videoRef.current.style.width = '100vw';
-                videoRef.current.style.height = '100vh';
-                videoRef.current.style.objectFit = 'cover';
-                document.documentElement.style.overflow = 'hidden';
+                await videoRef.current.play(); // Явно запускаем воспроизведение
+                setIsCameraOpen(true);
+                // Запускаем эффект сканирования только после готовности видео
+                setIsVideoReady(false);
             }
-            setIsCameraOpen(true);
-            // Запускаем эффект сканирования
-            setIsScanning(true);
         } catch (error) {
             console.error('Error accessing camera:', error);
             alert('Ошибка при доступе к камере. Пожалуйста, убедитесь, что у приложения есть разрешение на использование камеры.');
+        }
+    };
+
+    const handleVideoReady = () => {
+        setIsVideoReady(true);
+        setIsScanning(true);
+        if (videoRef.current) {
+            videoRef.current.style.width = '100vw';
+            videoRef.current.style.height = '100vh';
+            videoRef.current.style.objectFit = 'cover';
+            document.documentElement.style.overflow = 'hidden';
         }
     };
 
@@ -130,9 +139,10 @@ export const Scanner = () => {
                             ref={videoRef}
                             autoPlay
                             playsInline
-                            className="w-full h-full object-cover"
+                            onLoadedMetadata={handleVideoReady}
+                            className={`w-full h-full object-cover ${isVideoReady ? 'opacity-100' : 'opacity-0'}`}
                         />
-                        {isScanning && (
+                        {isScanning && isVideoReady && (
                             <div className="scanner-line"></div>
                         )}
                         <div className="absolute bottom-8 left-0 right-0 flex justify-center space-x-4">

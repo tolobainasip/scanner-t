@@ -95,6 +95,10 @@ body {
   background: #000;
 }
 
+video {
+  transition: opacity 0.3s ease-in-out;
+}
+
 .scanner-line {
   position: absolute;
   top: 0;
@@ -104,6 +108,7 @@ body {
   background: #00ff00;
   box-shadow: 0 0 8px #00ff00;
   animation: scan 2s linear infinite;
+  z-index: 10000;
 }
 
 @keyframes scan {
