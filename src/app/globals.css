@@ -81,3 +81,39 @@ body {
 .btn-danger {
   @apply bg-red-500 text-white hover:bg-red-600 active:bg-red-700;
 }
+
+.camera-fullscreen {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  background: #000;
+}
+
+.scanner-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #00ff00;
+  box-shadow: 0 0 8px #00ff00;
+  animation: scan 2s linear infinite;
+}
+
+@keyframes scan {
+  0% {
+    top: 0;
+  }
+  50% {
+    top: 100%;
+  }
+  100% {
+    top: 0;
+  }
+}
