@@ -91,11 +91,12 @@ export const Scanner = () => {
         }
 
         // Очищаем видео элемент
-        if (videoRef.current) {
-            videoRef.current.srcObject = null;
-            videoRef.current.style.width = '';
-            videoRef.current.style.height = '';
-            videoRef.current.style.objectFit = '';
+        const videoElement = videoRef.current;
+        if (videoElement) {
+            videoElement.srcObject = null;
+            videoElement.style.width = '';
+            videoElement.style.height = '';
+            videoElement.style.objectFit = '';
         }
 
         // Восстанавливаем прокрутку
